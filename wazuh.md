@@ -261,28 +261,80 @@ docker-compose logs -f kibana
 ## ЭТАП 6: Установка Wazuh Dashboard из Docker
 
 ```bash
-# Загружаем образ Docker
-docker pull docker.elastic.co/kibana/kibana:8.19.6
+# Добавляем GPG ключ Wazuh для Dashboard
+curl -s https://packages.wazuh.com/key/GPG-KEY-WAZUH | gpg --no-default-keyring --keyring gnupg-ring:/usr/share/keyrings/wazuh.gpg --import -
+
+# Исправляем права
+sudo chmod 644 /usr/share/keyrings/wazuh.gpg
+
+# Добавляем репозиторий Wazuh Dashboard
+echo "deb [signed-by=/usr/share/keyrings/wazuh.gpg] https://packages.wazuh.com/4.x/apt/ stable main" | sudo tee /etc/apt/sources.list.d/wazuh-dashboard.list
+
+# Обновляем список пакетов
+sudo apt update
+
+# Загружаем образ Docker для Wazuh Dashboard (официальный образ)
+docker pull wazuh/wazuh-dashboard:latest
 
 # Запускаем Dashboard на порту 5602
 docker run -d \
   --name wazuh-dashboard \
   --network host \
-  -e ELASTICSEARCH_HOSTS=http://localhost:9200 \
-  -e xpack.security.enabled=false \
-  docker.elastic.co/kibana/kibana:8.19.6
+  -e INDEXER_URL=http://localhost:9200 \
+  -e INDEXER_USERNAME=admin \
+  -e INDEXER_PASSWORD=admin \
+  -e WAZUH_API_URL=http://localhost:55000 \
+  -e WAZUH_API_USERNAME=wazuh \
+  -e WAZUH_API_PASSWORD=wazuh \
+  wazuh/wazuh-dashboard:latest
 
-# Ждем 30 секунд на инициализацию
-sleep 30
+# Ждем 40 секунд на инициализацию
+sleep 40
 
 # Проверяем статус
 docker ps | grep wazuh-dashboard
 
 # Смотрим логи
 docker logs wazuh-dashboard
+
+# Тестируем (должен вернуть HTML)
+curl http://localhost:5602 | head -20
 ```
 
-**Доступ:** http://ВАШЕ_IP:5601 (используем Kibana как Dashboard)
+**Доступ:** http://ВАШЕ_IP:5602
+
+### Альтернатива: Использовать docker-compose для Dashboard
+
+```bash
+# Добавляем Dashboard в существующий docker-compose.yml
+cat >> docker-compose.yml << 'EOF'
+
+  wazuh-dashboard:
+    image: wazuh/wazuh-dashboard:latest
+    container_name: wazuh-dashboard
+    network_mode: "host"
+    environment:
+      - INDEXER_URL=http://localhost:9200
+      - INDEXER_USERNAME=admin
+      - INDEXER_PASSWORD=admin
+      - WAZUH_API_URL=http://localhost:55000
+      - WAZUH_API_USERNAME=wazuh
+      - WAZUH_API_PASSWORD=wazuh
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5602"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+EOF
+
+# Запускаем Dashboard
+docker-compose up -d wazuh-dashboard
+
+# Проверяем логи
+docker-compose logs -f wazuh-dashboard
+```
 
 ---
 
