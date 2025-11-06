@@ -69,6 +69,32 @@ sudo apt update
 sudo apt install -y elasticsearch
 ```
 
+### Подготовка директорий Elasticsearch
+
+```bash
+# Создаем директорию для PID файла
+sudo mkdir -p /var/run/elasticsearch
+sudo chown elasticsearch:elasticsearch /var/run/elasticsearch
+sudo chmod 755 /var/run/elasticsearch
+
+# Очищаем старые данные и логи
+sudo rm -rf /var/lib/elasticsearch/*
+sudo rm -rf /var/log/elasticsearch/*
+sudo rm -rf /var/lib/elasticsearch/.elasticsearch
+
+# Даем правильные права
+sudo chown -R elasticsearch:elasticsearch /var/lib/elasticsearch
+sudo chown -R elasticsearch:elasticsearch /var/log/elasticsearch
+sudo chown -R elasticsearch:elasticsearch /etc/elasticsearch
+
+sudo chmod 750 /var/lib/elasticsearch
+sudo chmod 750 /var/log/elasticsearch
+sudo chmod 750 /etc/elasticsearch
+
+sudo chmod 640 /etc/elasticsearch/elasticsearch.yml
+sudo chmod 640 /etc/elasticsearch/jvm.options
+```
+
 ### Конфигурация Elasticsearch
 
 ```bash
@@ -84,7 +110,12 @@ discovery.type: single-node
 xpack.security.enabled: false
 xpack.watcher.enabled: false
 xpack.ml.enabled: false
+xpack.security.transport.ssl.enabled: false
+xpack.security.http.ssl.enabled: false
 EOF'
+
+# Проверяем конфиг
+sudo cat /etc/elasticsearch/elasticsearch.yml
 ```
 
 ### Настройка памяти JVM
@@ -103,20 +134,16 @@ sudo nano /etc/elasticsearch/jvm.options
 
 Сохраняем (Ctrl+O, Enter, Ctrl+X)
 
+Или используйте команду:
+
+```bash
+sudo sed -i 's/^-Xms1g/-Xms512m/' /etc/elasticsearch/jvm.options
+sudo sed -i 's/^-Xmx1g/-Xmx512m/' /etc/elasticsearch/jvm.options
+```
+
 ### Запуск Elasticsearch
 
 ```bash
-# Удаляем старые данные
-sudo rm -rf /var/lib/elasticsearch/*
-sudo rm -rf /var/log/elasticsearch/*
-
-# Даем права
-sudo chown -R elasticsearch:elasticsearch /var/lib/elasticsearch
-sudo chown -R elasticsearch:elasticsearch /var/log/elasticsearch
-sudo chown -R elasticsearch:elasticsearch /etc/elasticsearch
-sudo chmod 755 /var/lib/elasticsearch
-sudo chmod 755 /var/log/elasticsearch
-
 # Перезагружаем systemd
 sudo systemctl daemon-reload
 
@@ -134,6 +161,20 @@ sudo systemctl status elasticsearch
 
 # Тестируем подключение (должен вернуть JSON)
 curl http://localhost:9200
+```
+
+**Ожидаемый результат:**
+```json
+{
+  "name" : "node-1",
+  "cluster_name" : "wazuh",
+  "cluster_uuid" : "...",
+  "version" : {
+    "number" : "8.19.6",
+    ...
+  },
+  "tagline" : "You Know, for Search"
+}
 ```
 
 ---
@@ -395,24 +436,24 @@ curl http://localhost:9200/_cluster/health?pretty
 
 # Посмотреть все алерты
 curl http://localhost:9200/wazuh-alerts-*/_search?size=100
+
+# Проверить статус всех сервисов
+sudo systemctl status elasticsearch kibana wazuh-dashboard wazuh-manager filebeat
 ```
 
 ---
 
 ## Решение типичных проблем
 
-### 1. Dashboard/Kibana не загружается
-
-**Решение:** Убедитесь что Elasticsearch запущен:
-```bash
-sudo systemctl status elasticsearch
-curl http://localhost:9200
-```
-
-### 2. Elasticsearch не запускается
+### 1. Elasticsearch не запускается
 
 **Решение:**
 ```bash
+# Создаем директорию для PID
+sudo mkdir -p /var/run/elasticsearch
+sudo chown elasticsearch:elasticsearch /var/run/elasticsearch
+sudo chmod 755 /var/run/elasticsearch
+
 # Проверяем логи
 sudo tail -50 /var/log/elasticsearch/elasticsearch.log
 
@@ -420,8 +461,19 @@ sudo tail -50 /var/log/elasticsearch/elasticsearch.log
 sudo chown -R elasticsearch:elasticsearch /var/lib/elasticsearch
 sudo chown -R elasticsearch:elasticsearch /var/log/elasticsearch
 
+# Проверяем конфиг (не должно быть SSL конфигов если безопасность отключена)
+sudo cat /etc/elasticsearch/elasticsearch.yml
+
 # Перезапускаем
 sudo systemctl restart elasticsearch
+```
+
+### 2. Dashboard/Kibana не загружается
+
+**Решение:** Убедитесь что Elasticsearch запущен:
+```bash
+sudo systemctl status elasticsearch
+curl http://localhost:9200
 ```
 
 ### 3. Агент не подключается к Manager
@@ -453,21 +505,28 @@ sudo tail -50 /var/ossec/logs/ossec.log
 curl http://localhost:9200/_cat/indices?v
 ```
 
-### 5. Ошибка подключения Kibana/Dashboard к Elasticsearch
+### 5. Ошибка при запуске Elasticsearch: "invalid configuration for xpack.security.transport.ssl"
 
-**Решение:** Убедитесь что в конфигах отключена безопасность:
+**Решение:** Переписать конфиг elasticsearch.yml с явным отключением SSL:
+
 ```bash
-# Для Elasticsearch
-grep "xpack.security" /etc/elasticsearch/elasticsearch.yml
+sudo bash -c 'cat > /etc/elasticsearch/elasticsearch.yml << "EOF"
+cluster.name: wazuh
+node.name: node-1
+path.data: /var/lib/elasticsearch
+path.logs: /var/log/elasticsearch
+network.host: 0.0.0.0
+http.port: 9200
+discovery.type: single-node
+xpack.security.enabled: false
+xpack.watcher.enabled: false
+xpack.ml.enabled: false
+xpack.security.transport.ssl.enabled: false
+xpack.security.http.ssl.enabled: false
+EOF'
 
-# Для Kibana
-grep "xpack.security" /etc/kibana/kibana.yml
-
-# Для Dashboard
-grep "xpack.security" /etc/wazuh-dashboard/opensearch_dashboards.yml
+sudo systemctl restart elasticsearch
 ```
-
-Должно быть: `xpack.security.enabled: false`
 
 ---
 
