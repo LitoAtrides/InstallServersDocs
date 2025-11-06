@@ -1,4 +1,4 @@
-# Полная инструкция по установке Wazuh на Debian 13
+# Полная инструкция по установке Wazuh на Debian 13 (Elasticsearch 8.x)
 
 ## Предварительные требования
 
@@ -51,36 +51,28 @@ sudo systemctl status wazuh-manager
 
 ---
 
-## ЭТАП 3: Установка Elasticsearch 7.17
+## ЭТАП 3: Установка Elasticsearch 8.x
 
-**ВАЖНО:** Используем Elasticsearch 7.17 для совместимости с обоими интерфейсами (Kibana и Wazuh Dashboard).
+**ВАЖНО:** Используем Elasticsearch 8.x (последнюю поддерживаемую версию) для совместимости с Kibana и Wazuh Dashboard.
 
 ```bash
 # Добавляем GPG ключ Elasticsearch
 curl -fsSL https://artifacts.elastic.co/GPG-KEY-elasticsearch | sudo gpg --dearmor -o /usr/share/keyrings/elasticsearch-keyring.gpg
 
-# Добавляем репозиторий
-echo "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/7.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-7.x.list
+# Добавляем репозиторий для 8.x
+echo "deb [signed-by=/usr/share/keyrings/elasticsearch-keyring.gpg] https://artifacts.elastic.co/packages/8.x/apt stable main" | sudo tee /etc/apt/sources.list.d/elastic-8.x.list
 
 # Обновляем список пакетов
 sudo apt update
 
-# Устанавливаем Elasticsearch 7.17
-sudo apt install -y elasticsearch=7.17.17
-```
-
-Если репозиторий недоступен, скачиваем deb файл напрямую:
-
-```bash
-cd /tmp
-wget https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-7.17.17-amd64.deb
-sudo dpkg -i elasticsearch-7.17.17-amd64.deb
+# Устанавливаем последнюю версию Elasticsearch 8.x
+sudo apt install -y elasticsearch
 ```
 
 ### Конфигурация Elasticsearch
 
 ```bash
-# Создаем конфиг
+# Создаем конфиг с отключенной безопасностью (для разработки)
 sudo bash -c 'cat > /etc/elasticsearch/elasticsearch.yml << "EOF"
 cluster.name: wazuh
 node.name: node-1
@@ -140,13 +132,13 @@ sleep 30
 # Проверяем статус
 sudo systemctl status elasticsearch
 
-# Тестируем подключение (должен вернуть JSON без пароля)
+# Тестируем подключение (должен вернуть JSON)
 curl http://localhost:9200
 ```
 
 ---
 
-## ЭТАП 4: Установка Kibana
+## ЭТАП 4: Установка Kibana 8.x
 
 ```bash
 # Устанавливаем Kibana
@@ -158,6 +150,7 @@ elasticsearch.hosts: ["http://localhost:9200"]
 server.port: 5601
 server.host: "0.0.0.0"
 server.name: "wazuh-kibana"
+xpack.security.enabled: false
 EOF'
 
 # Проверяем конфиг
@@ -193,6 +186,7 @@ sudo bash -c 'cat > /etc/wazuh-dashboard/opensearch_dashboards.yml << "EOF"
 server.port: 5602
 server.host: 0.0.0.0
 opensearch.hosts: http://localhost:9200
+xpack.security.enabled: false
 EOF'
 
 # Создаем SSL сертификаты (самоподписанные)
@@ -366,7 +360,7 @@ http://ВАШЕ_IP:5602
 ```
 - Специализированный интерфейс Wazuh
 - Без пароля
-- Полностью совместим с Elasticsearch 7.x
+- Полностью совместим с Elasticsearch 8.x
 
 ### Wazuh API
 ```
@@ -459,14 +453,21 @@ sudo tail -50 /var/ossec/logs/ossec.log
 curl http://localhost:9200/_cat/indices?v
 ```
 
-### 5. Ошибка совместимости при запуске Dashboard
+### 5. Ошибка подключения Kibana/Dashboard к Elasticsearch
 
-**Решение:** Убедитесь что используется Elasticsearch 7.x:
+**Решение:** Убедитесь что в конфигах отключена безопасность:
 ```bash
-curl http://localhost:9200 | grep version
+# Для Elasticsearch
+grep "xpack.security" /etc/elasticsearch/elasticsearch.yml
+
+# Для Kibana
+grep "xpack.security" /etc/kibana/kibana.yml
+
+# Для Dashboard
+grep "xpack.security" /etc/wazuh-dashboard/opensearch_dashboards.yml
 ```
 
-Должна быть версия 7.17.x, а не 8.x
+Должно быть: `xpack.security.enabled: false`
 
 ---
 
@@ -475,8 +476,8 @@ curl http://localhost:9200 | grep version
 ```
 Manager (Debian 13):
 ├── Wazuh Manager (порт 1514, 1515, 55000)
-├── Elasticsearch 7.17 (порт 9200)
-├── Kibana 7.x (порт 5601)
+├── Elasticsearch 8.x (порт 9200)
+├── Kibana 8.x (порт 5601)
 ├── Wazuh Dashboard (порт 5602)
 └── Filebeat (сбор логов)
 
@@ -490,8 +491,8 @@ Agents (любые ОС):
 
 ✅ **Установлено:**
 - Wazuh Manager 4.x
-- Elasticsearch 7.17
-- Kibana 7.x
+- Elasticsearch 8.x (последняя поддерживаемая версия)
+- Kibana 8.x
 - Wazuh Dashboard
 - Filebeat (опционально)
 
