@@ -1,11 +1,11 @@
-# Полная инструкция по установке Wazuh на Debian 13 (Elasticsearch 8.x)
+# Полная инструкция по установке Wazuh на Debian 13 с Docker (Elasticsearch 8.x)
 
 ## Предварительные требования
 
 - Debian 13
 - 4+ ГБ оперативной памяти
 - 50+ ГБ свободного места на диске
-- Интернет для загрузки пакетов
+- Интернет для загрузки пакетов и Docker образов
 
 ---
 
@@ -22,7 +22,30 @@ sudo apt install -y curl gnupg2 lsb-release apt-transport-https ca-certificates 
 
 ---
 
-## ЭТАП 2: Установка Wazuh Manager
+## ЭТАП 2: Установка Docker и Docker Compose
+
+```bash
+# Устанавливаем Docker
+sudo apt install -y docker.io docker-compose
+
+# Добавляем текущего пользователя в группу docker
+sudo usermod -aG docker $USER
+
+# Активируем группу
+newgrp docker
+
+# Проверяем версию
+docker --version
+docker-compose --version
+
+# Запускаем Docker демон
+sudo systemctl enable docker
+sudo systemctl start docker
+```
+
+---
+
+## ЭТАП 3: Установка Wazuh Manager
 
 ```bash
 # Добавляем GPG ключ Wazuh
@@ -51,9 +74,7 @@ sudo systemctl status wazuh-manager
 
 ---
 
-## ЭТАП 3: Установка Elasticsearch 8.x
-
-**ВАЖНО:** Используем Elasticsearch 8.x (последнюю поддерживаемую версию) для совместимости с Kibana и Wazuh Dashboard.
+## ЭТАП 4: Установка Elasticsearch 8.x
 
 ```bash
 # Добавляем GPG ключ Elasticsearch
@@ -121,24 +142,12 @@ sudo cat /etc/elasticsearch/elasticsearch.yml
 ### Настройка памяти JVM
 
 ```bash
-# Открываем jvm опции
-sudo nano /etc/elasticsearch/jvm.options
-```
-
-Найдите строки с `-Xms` и `-Xmx` и измените на:
-
-```
--Xms512m
--Xmx512m
-```
-
-Сохраняем (Ctrl+O, Enter, Ctrl+X)
-
-Или используйте команду:
-
-```bash
+# Используем sed для изменения параметров памяти
 sudo sed -i 's/^-Xms1g/-Xms512m/' /etc/elasticsearch/jvm.options
 sudo sed -i 's/^-Xmx1g/-Xmx512m/' /etc/elasticsearch/jvm.options
+
+# Проверяем изменения
+grep "^-Xm" /etc/elasticsearch/jvm.options
 ```
 
 ### Запуск Elasticsearch
@@ -179,34 +188,34 @@ curl http://localhost:9200
 
 ---
 
-## ЭТАП 4: Установка Kibana 8.x
+## ЭТАП 5: Установка Kibana из Docker
 
 ```bash
-# Устанавливаем Kibana
-sudo apt install -y kibana
+# Создаем директорию для проекта
+mkdir -p ~/wazuh-docker
+cd ~/wazuh-docker
 
-# Создаем конфиг
-sudo bash -c 'cat > /etc/kibana/kibana.yml << "EOF"
-elasticsearch.hosts: ["http://localhost:9200"]
-server.port: 5601
-server.host: "0.0.0.0"
-server.name: "wazuh-kibana"
-xpack.security.enabled: false
-EOF'
+# Загружаем образ Docker
+docker pull docker.elastic.co/kibana/kibana:8.19.6
 
-# Проверяем конфиг
-cat /etc/kibana/kibana.yml
-
-# Запускаем
-sudo systemctl daemon-reload
-sudo systemctl enable kibana
-sudo systemctl start kibana
+# Запускаем контейнер
+docker run -d \
+  --name kibana \
+  --network host \
+  -e ELASTICSEARCH_HOSTS=http://localhost:9200 \
+  -e xpack.security.enabled=false \
+  -e xpack.alerting.enabled=false \
+  -e xpack.watcher.enabled=false \
+  docker.elastic.co/kibana/kibana:8.19.6
 
 # Ждем 40 секунд на инициализацию
 sleep 40
 
-# Проверяем статус
-sudo systemctl status kibana
+# Проверяем статус контейнера
+docker ps | grep kibana
+
+# Смотрим логи
+docker logs kibana
 
 # Тестируем (должен вернуть HTML)
 curl http://localhost:5601 | head -20
@@ -214,51 +223,70 @@ curl http://localhost:5601 | head -20
 
 **Доступ:** http://ВАШЕ_IP:5601
 
----
-
-## ЭТАП 5: Установка Wazuh Dashboard
+### Альтернатива: Использовать docker-compose
 
 ```bash
-# Устанавливаем Dashboard
-sudo apt install -y wazuh-dashboard
+# Создаем docker-compose.yml
+cat > docker-compose.yml << 'EOF'
+version: '3.8'
 
-# Создаем минимальный конфиг
-sudo bash -c 'cat > /etc/wazuh-dashboard/opensearch_dashboards.yml << "EOF"
-server.port: 5602
-server.host: 0.0.0.0
-opensearch.hosts: http://localhost:9200
-xpack.security.enabled: false
-EOF'
-
-# Создаем SSL сертификаты (самоподписанные)
-sudo mkdir -p /etc/wazuh-dashboard/certs
-sudo openssl req -x509 -newkey rsa:2048 \
-  -keyout /etc/wazuh-dashboard/certs/dashboard-key.pem \
-  -out /etc/wazuh-dashboard/certs/dashboard.pem \
-  -days 365 -nodes \
-  -subj "/C=RU/ST=Moscow/L=Moscow/O=Wazuh/CN=wazuh-dashboard"
-
-# Даем права
-sudo chown -R wazuh-dashboard:wazuh-dashboard /etc/wazuh-dashboard/certs
-sudo chmod 600 /etc/wazuh-dashboard/certs/*
+services:
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.19.6
+    container_name: kibana
+    network_mode: "host"
+    environment:
+      - ELASTICSEARCH_HOSTS=http://localhost:9200
+      - xpack.security.enabled=false
+      - xpack.alerting.enabled=false
+      - xpack.watcher.enabled=false
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5601"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 40s
+EOF
 
 # Запускаем
-sudo systemctl daemon-reload
-sudo systemctl enable wazuh-dashboard
-sudo systemctl start wazuh-dashboard
+docker-compose up -d
+
+# Проверяем логи
+docker-compose logs -f kibana
+```
+
+---
+
+## ЭТАП 6: Установка Wazuh Dashboard из Docker
+
+```bash
+# Загружаем образ Docker
+docker pull docker.elastic.co/kibana/kibana:8.19.6
+
+# Запускаем Dashboard на порту 5602
+docker run -d \
+  --name wazuh-dashboard \
+  --network host \
+  -e ELASTICSEARCH_HOSTS=http://localhost:9200 \
+  -e xpack.security.enabled=false \
+  docker.elastic.co/kibana/kibana:8.19.6
 
 # Ждем 30 секунд на инициализацию
 sleep 30
 
 # Проверяем статус
-sudo systemctl status wazuh-dashboard
+docker ps | grep wazuh-dashboard
+
+# Смотрим логи
+docker logs wazuh-dashboard
 ```
 
-**Доступ:** http://ВАШЕ_IP:5602
+**Доступ:** http://ВАШЕ_IP:5601 (используем Kibana как Dashboard)
 
 ---
 
-## ЭТАП 6: Установка Filebeat (опционально, для сбора логов)
+## ЭТАП 7: Установка Filebeat (опционально, для сбора логов)
 
 ```bash
 # Устанавливаем Filebeat
@@ -298,7 +326,7 @@ sudo systemctl status filebeat
 
 ---
 
-## ЭТАП 7: Конфигурация Firewall
+## ЭТАП 8: Конфигурация Firewall
 
 ```bash
 # Разрешаем SSH (ВАЖНО!)
@@ -328,22 +356,31 @@ sudo ufw status
 
 ---
 
-## ЭТАП 8: Проверка всех сервисов
+## ЭТАП 9: Проверка всех сервисов
 
 ```bash
-# Проверяем все сервисы
-sudo systemctl status elasticsearch kibana wazuh-dashboard filebeat wazuh-manager
+# Проверяем все сервисы на хосте
+sudo systemctl status elasticsearch wazuh-manager filebeat
+
+# Проверяем контейнеры Docker
+docker ps
 
 # Проверяем слушающие порты
 sudo ss -tlnp 2>/dev/null | grep -E "9200|5601|5602|1514|1515|55000"
 
 # Проверяем логи Wazuh Manager
 sudo tail -20 /var/ossec/logs/ossec.log
+
+# Проверяем логи Kibana в Docker
+docker logs kibana
+
+# Проверяем логи Dashboard в Docker
+docker logs wazuh-dashboard
 ```
 
 ---
 
-## ЭТАП 9: Установка Wazuh Agent на клиентских машинах
+## ЭТАП 10: Установка Wazuh Agent на клиентских машинах
 
 ### На клиентской машине (Linux):
 
@@ -385,23 +422,15 @@ sudo /var/ossec/bin/manage_agents -r AGENT_ID
 
 ---
 
-## ЭТАП 10: Первый доступ
+## ЭТАП 11: Первый доступ
 
-### Kibana
+### Kibana / Wazuh Dashboard
 ```
 http://ВАШЕ_IP:5601
 ```
 - Полнофункциональная аналитика
 - Без пароля
 - Стабилен и быстро загружается
-
-### Wazuh Dashboard
-```
-http://ВАШЕ_IP:5602
-```
-- Специализированный интерфейс Wazuh
-- Без пароля
-- Полностью совместим с Elasticsearch 8.x
 
 ### Wazuh API
 ```
@@ -412,7 +441,40 @@ https://ВАШЕ_IP:55000
 
 ---
 
-## Полезные команды
+## Полезные команды Docker
+
+```bash
+# Просмотр всех контейнеров
+docker ps -a
+
+# Остановить контейнер Kibana
+docker stop kibana
+
+# Перезагрузить контейнер
+docker restart kibana
+
+# Удалить контейнер
+docker rm kibana
+
+# Посмотреть логи
+docker logs -f kibana
+
+# Посмотреть последние 50 строк логов
+docker logs --tail 50 kibana
+
+# Вход в контейнер (если нужно)
+docker exec -it kibana bash
+
+# Очистить все неиспользуемые образы
+docker image prune -a
+
+# Просмотр объема дискового пространства Docker
+docker system df
+```
+
+---
+
+## Полезные команды Wazuh/Elasticsearch
 
 ```bash
 # Перезагрузить сервис
@@ -438,7 +500,7 @@ curl http://localhost:9200/_cluster/health?pretty
 curl http://localhost:9200/wazuh-alerts-*/_search?size=100
 
 # Проверить статус всех сервисов
-sudo systemctl status elasticsearch kibana wazuh-dashboard wazuh-manager filebeat
+sudo systemctl status elasticsearch wazuh-manager filebeat
 ```
 
 ---
@@ -461,33 +523,44 @@ sudo tail -50 /var/log/elasticsearch/elasticsearch.log
 sudo chown -R elasticsearch:elasticsearch /var/lib/elasticsearch
 sudo chown -R elasticsearch:elasticsearch /var/log/elasticsearch
 
-# Проверяем конфиг (не должно быть SSL конфигов если безопасность отключена)
-sudo cat /etc/elasticsearch/elasticsearch.yml
-
 # Перезапускаем
 sudo systemctl restart elasticsearch
 ```
 
-### 2. Dashboard/Kibana не загружается
+### 2. Kibana в Docker не может подключиться к Elasticsearch
 
-**Решение:** Убедитесь что Elasticsearch запущен:
+**Решение:**
 ```bash
-sudo systemctl status elasticsearch
+# Проверяем что Elasticsearch работает
 curl http://localhost:9200
+
+# Смотрим логи Kibana
+docker logs kibana
+
+# Если используется --network host, это должно работать
+# Если используется bridge сеть, используйте:
+# ELASTICSEARCH_HOSTS=http://host.docker.internal:9200
+
+# Перезагружаем контейнер
+docker restart kibana
 ```
 
-### 3. Агент не подключается к Manager
+### 3. Порт 5601 уже занят
 
-**Проверьте:**
+**Решение:**
 ```bash
-# На Manager - список агентов
-sudo /var/ossec/bin/agent_control -l
+# Проверяем что занимает порт
+sudo lsof -i :5601
 
-# На агенте - логи
-sudo tail -f /var/ossec/logs/agent.log
+# Если используется docker-compose, меняем порт:
+# ports:
+#   - "5602:5601"
 
-# Проверьте firewall
-sudo ufw status
+# Или убиваем процесс
+sudo kill -9 <PID>
+
+# Перезагружаем контейнер
+docker restart kibana
 ```
 
 ### 4. Нет данных в Dashboard/Kibana
@@ -505,27 +578,28 @@ sudo tail -50 /var/ossec/logs/ossec.log
 curl http://localhost:9200/_cat/indices?v
 ```
 
-### 5. Ошибка при запуске Elasticsearch: "invalid configuration for xpack.security.transport.ssl"
+### 5. Docker контейнер постоянно перезагружается
 
-**Решение:** Переписать конфиг elasticsearch.yml с явным отключением SSL:
-
+**Решение:**
 ```bash
-sudo bash -c 'cat > /etc/elasticsearch/elasticsearch.yml << "EOF"
-cluster.name: wazuh
-node.name: node-1
-path.data: /var/lib/elasticsearch
-path.logs: /var/log/elasticsearch
-network.host: 0.0.0.0
-http.port: 9200
-discovery.type: single-node
-xpack.security.enabled: false
-xpack.watcher.enabled: false
-xpack.ml.enabled: false
-xpack.security.transport.ssl.enabled: false
-xpack.security.http.ssl.enabled: false
-EOF'
+# Смотрим логи
+docker logs kibana
 
-sudo systemctl restart elasticsearch
+# Проверяем статус Elasticsearch
+curl http://localhost:9200
+
+# Убеждаемся что используется правильная версия образа
+docker inspect kibana | grep Image
+
+# Перезапускаем контейнер с явными параметрами
+docker stop kibana
+docker rm kibana
+docker run -d \
+  --name kibana \
+  --network host \
+  -e ELASTICSEARCH_HOSTS=http://localhost:9200 \
+  -e xpack.security.enabled=false \
+  docker.elastic.co/kibana/kibana:8.19.6
 ```
 
 ---
@@ -535,10 +609,9 @@ sudo systemctl restart elasticsearch
 ```
 Manager (Debian 13):
 ├── Wazuh Manager (порт 1514, 1515, 55000)
-├── Elasticsearch 8.x (порт 9200)
-├── Kibana 8.x (порт 5601)
-├── Wazuh Dashboard (порт 5602)
-└── Filebeat (сбор логов)
+├── Elasticsearch 8.x (порт 9200) - на хосте
+├── Kibana 8.x (порт 5601) - в Docker контейнере
+└── Filebeat (сбор логов) - на хосте
 
 Agents (любые ОС):
 └── Wazuh Agent → подключение к Manager на порту 1514/1515
@@ -549,16 +622,20 @@ Agents (любые ОС):
 ## Резюме
 
 ✅ **Установлено:**
-- Wazuh Manager 4.x
-- Elasticsearch 8.x (последняя поддерживаемая версия)
-- Kibana 8.x
-- Wazuh Dashboard
-- Filebeat (опционально)
+- Wazuh Manager 4.x (на хосте)
+- Elasticsearch 8.x (на хосте)
+- Kibana 8.x (в Docker)
+- Filebeat (на хосте, опционально)
 
 ✅ **Доступно:**
 - Kibana: http://IP:5601 (аналитика и логи)
-- Dashboard: http://IP:5602 (интерфейс Wazuh)
 - API: https://IP:55000 (управление)
+
+✅ **Преимущества Docker подхода:**
+- Нет проблем с репозиториями и зависимостями
+- Легко обновлять версию
+- Изоляция от системы
+- Легко откатывать изменения
 
 ✅ **Готово для:**
 - Подключения агентов на других машинах
