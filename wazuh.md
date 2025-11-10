@@ -179,8 +179,7 @@ curl http://localhost:9200
   "cluster_name" : "wazuh",
   "cluster_uuid" : "...",
   "version" : {
-    "number" : "8.19.6",
-    ...
+    "number" : "8.19.6"
   },
   "tagline" : "You Know, for Search"
 }
